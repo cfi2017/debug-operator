@@ -820,7 +820,7 @@ mod tests {
             DebugProfileSpec {
                 selector: ProfileSelector {
                     namespace_opt_in: BTreeMap::from([(
-                        "debug-operator.cfi.dev/enabled".to_string(),
+                        "debug-operator.hadron.re/enabled".to_string(),
                         "true".to_string(),
                     )]),
                     pod_labels: BTreeMap::from([("app".to_string(), "target".to_string())]),
@@ -870,7 +870,7 @@ mod tests {
     #[test]
     fn matches_namespace_labels_pod_labels_and_image_glob() {
         let ns_labels = BTreeMap::from([(
-            "debug-operator.cfi.dev/enabled".to_string(),
+            "debug-operator.hadron.re/enabled".to_string(),
             "true".to_string(),
         )]);
         assert!(profile_matches(&profile(), &pod(), &ns_labels));

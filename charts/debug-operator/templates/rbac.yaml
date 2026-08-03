@@ -1,13 +1,10 @@
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: debug-operator
-  namespace: debug-operator-system
----
+{{- if .Values.rbac.create -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: debug-operator
+  name: {{ include "debug-operator.fullname" . }}
+  labels:
+    {{- include "debug-operator.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["namespaces"]
@@ -28,12 +25,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: debug-operator
+  name: {{ include "debug-operator.fullname" . }}
+  labels:
+    {{- include "debug-operator.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: debug-operator
+  name: {{ include "debug-operator.fullname" . }}
 subjects:
   - kind: ServiceAccount
-    name: debug-operator
-    namespace: debug-operator-system
+    name: {{ include "debug-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

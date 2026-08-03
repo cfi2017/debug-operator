@@ -5,7 +5,7 @@ metadata:
   annotations:
     cert-manager.io/inject-ca-from: debug-operator-system/debug-operator-serving-cert
 webhooks:
-  - name: pods.debug.cfi.dev
+  - name: pods.debug.hadron.re
     admissionReviewVersions: ["v1"]
     sideEffects: None
     failurePolicy: Fail
@@ -19,7 +19,7 @@ webhooks:
         port: 443
     namespaceSelector:
       matchLabels:
-        debug-operator.cfi.dev/enabled: "true"
+        debug-operator.hadron.re/enabled: "true"
     rules:
       - apiGroups: [""]
         apiVersions: ["v1"]

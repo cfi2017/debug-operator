@@ -7,7 +7,7 @@ The shareable unit is a namespaced `DebugProfile` CRD. Profiles select Pods by n
 ## Current behavior
 
 - Mutates only Pod `CREATE` admission requests.
-- Requires the namespace label `debug-operator.cfi.dev/enabled=true`.
+- Requires the namespace label `debug-operator.hadron.re/enabled=true`.
 - Skips the operator's own Pods and Pods already annotated as mutated.
 - Uses deterministic JSON patches and fails admission on name conflicts by default.
 - Runs optional Python bootstrap code as a per-profile, per-generation Kubernetes Job.
@@ -45,10 +45,20 @@ kubectl apply -k deploy
 
 The provided manifests assume cert-manager is installed. Without cert-manager, create a `debug-operator-tls` secret yourself and set `webhooks[].clientConfig.caBundle` in `deploy/webhook.yaml`.
 
+Or install with Helm:
+
+```sh
+helm upgrade --install debug-operator charts/debug-operator \
+  --namespace debug-operator-system \
+  --create-namespace
+```
+
+The chart installs the `DebugProfile` CRD from `charts/debug-operator/crds/` and templates RBAC, the operator Deployment, Service, webhook configuration, and optional cert-manager resources.
+
 Opt a namespace into mutation:
 
 ```sh
-kubectl label namespace default debug-operator.cfi.dev/enabled=true
+kubectl label namespace default debug-operator.hadron.re/enabled=true
 kubectl apply -f samples/env-and-init-profile.yaml
 ```
 

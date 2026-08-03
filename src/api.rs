@@ -8,17 +8,17 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const NS_OPT_IN_LABEL: &str = "debug-operator.cfi.dev/enabled";
-pub const MUTATED_BY_ANNOTATION: &str = "debug-operator.cfi.dev/mutated";
-pub const PROFILE_ANNOTATION: &str = "debug-operator.cfi.dev/profile";
-pub const PROFILE_GENERATION_ANNOTATION: &str = "debug-operator.cfi.dev/profile-generation";
-pub const MUTATION_HASH_ANNOTATION: &str = "debug-operator.cfi.dev/mutation-hash";
+pub const NS_OPT_IN_LABEL: &str = "debug-operator.hadron.re/enabled";
+pub const MUTATED_BY_ANNOTATION: &str = "debug-operator.hadron.re/mutated";
+pub const PROFILE_ANNOTATION: &str = "debug-operator.hadron.re/profile";
+pub const PROFILE_GENERATION_ANNOTATION: &str = "debug-operator.hadron.re/profile-generation";
+pub const MUTATION_HASH_ANNOTATION: &str = "debug-operator.hadron.re/mutation-hash";
 pub const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by";
 pub const OPERATOR_NAME: &str = "debug-operator";
 
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, JsonSchema)]
 #[kube(
-    group = "debug.cfi.dev",
+    group = "debug.hadron.re",
     version = "v1alpha1",
     kind = "DebugProfile",
     plural = "debugprofiles",

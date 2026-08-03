@@ -1,0 +1,36 @@
+{{- if .Values.webhook.create -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ .Values.webhook.name }}
+  labels:
+    {{- include "debug-operator.labels" . | nindent 4 }}
+  annotations:
+    {{- if .Values.certManager.enabled }}
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s" .Release.Namespace (include "debug-operator.certificateName" .) | quote }}
+    {{- end }}
+webhooks:
+  - name: pods.debug.hadron.re
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    reinvocationPolicy: {{ .Values.webhook.reinvocationPolicy }}
+    matchPolicy: Equivalent
+    clientConfig:
+      service:
+        name: {{ include "debug-operator.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /mutate/pods
+        port: {{ .Values.service.port }}
+      {{- if .Values.webhook.caBundle }}
+      caBundle: {{ .Values.webhook.caBundle | quote }}
+      {{- end }}
+    namespaceSelector:
+      {{- toYaml .Values.webhook.namespaceSelector | nindent 6 }}
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+        scope: "Namespaced"
+{{- end }}

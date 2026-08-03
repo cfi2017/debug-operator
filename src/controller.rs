@@ -225,7 +225,7 @@ async fn patch_status(
             name,
             &PatchParams::apply(OPERATOR_NAME),
             &Patch::Apply(serde_json::json!({
-                "apiVersion": "debug.cfi.dev/v1alpha1",
+                "apiVersion": "debug.hadron.re/v1alpha1",
                 "kind": "DebugProfile",
                 "status": status,
             })),

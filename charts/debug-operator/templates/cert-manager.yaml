@@ -1,0 +1,26 @@
+{{- if .Values.certManager.enabled -}}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "debug-operator.issuerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "debug-operator.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "debug-operator.certificateName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "debug-operator.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.tls.secretName }}
+  dnsNames:
+    - {{ include "debug-operator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+    - {{ include "debug-operator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    name: {{ include "debug-operator.issuerName" . }}
+{{- end }}

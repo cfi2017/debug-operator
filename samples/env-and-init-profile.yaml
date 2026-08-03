@@ -1,4 +1,4 @@
-apiVersion: debug.cfi.dev/v1alpha1
+apiVersion: debug.hadron.re/v1alpha1
 kind: DebugProfile
 metadata:
   name: env-and-init
@@ -6,7 +6,7 @@ metadata:
 spec:
   selector:
     namespaceOptIn:
-      debug-operator.cfi.dev/enabled: "true"
+      debug-operator.hadron.re/enabled: "true"
     podLabels:
       app: target
     imageGlobs:
