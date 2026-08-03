@@ -1,0 +1,60 @@
+apiVersion: debug.cfi.dev/v1alpha1
+kind: DebugProfile
+metadata:
+  name: bootstrap-output
+  namespace: default
+spec:
+  selector:
+    namespaceOptIn:
+      debug-operator.cfi.dev/enabled: "true"
+    podLabels:
+      app: target
+  bootstrap:
+    image: python:3.13-alpine
+    serviceAccountName: debug-bootstrap-writer
+    source: |
+      import json
+      import os
+      import ssl
+      import urllib.request
+
+      ns = open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read().strip()
+      token = open("/var/run/secrets/kubernetes.io/serviceaccount/token").read().strip()
+      ca = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+      body = json.dumps({
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {"name": "debug-bootstrap-output", "namespace": ns},
+        "data": {"message": "hello-from-bootstrap"}
+      }).encode()
+      req = urllib.request.Request(
+        f"https://kubernetes.default.svc/api/v1/namespaces/{ns}/configmaps",
+        data=body,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        method="POST",
+      )
+      try:
+        urllib.request.urlopen(req, context=ssl.create_default_context(cafile=ca)).read()
+      except urllib.error.HTTPError as e:
+        if e.code != 409:
+          raise
+    outputConfigMaps:
+      - debug-bootstrap-output
+    optional: true
+  injection:
+    env:
+      - name: DEBUG_BOOTSTRAP_MESSAGE
+        valueFrom:
+          configMapKeyRef:
+            name: debug-bootstrap-output
+            key: message
+            optional: true
+    volumes:
+      - name: debug-bootstrap-output
+        configMap:
+          name: debug-bootstrap-output
+          optional: true
+    volumeMounts:
+      - name: debug-bootstrap-output
+        mountPath: /debug/bootstrap
+        readOnly: true

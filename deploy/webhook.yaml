@@ -1,0 +1,28 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: debug-operator-pods
+  annotations:
+    cert-manager.io/inject-ca-from: debug-operator-system/debug-operator-serving-cert
+webhooks:
+  - name: pods.debug.cfi.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    reinvocationPolicy: IfNeeded
+    matchPolicy: Equivalent
+    clientConfig:
+      service:
+        name: debug-operator-webhook
+        namespace: debug-operator-system
+        path: /mutate/pods
+        port: 443
+    namespaceSelector:
+      matchLabels:
+        debug-operator.cfi.dev/enabled: "true"
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+        scope: "Namespaced"

@@ -1,0 +1,35 @@
+apiVersion: debug.cfi.dev/v1alpha1
+kind: DebugProfile
+metadata:
+  name: explicit-mitm
+  namespace: default
+spec:
+  selector:
+    namespaceOptIn:
+      debug-operator.cfi.dev/enabled: "true"
+    podLabels:
+      app: target
+  bootstrap:
+    image: python:3.13-alpine
+    optional: true
+    outputConfigMaps:
+      - debug-proxy-rules
+    outputSecrets:
+      - debug-mitm-ca
+  network:
+    mode: explicitProxy
+    proxy:
+      image: mitmproxy/mitmproxy:latest
+      port: 15080
+      rulesConfigMap: debug-proxy-rules
+    tls:
+      trustCa: true
+      caSecret: debug-mitm-ca
+    intercept:
+      domains:
+        - api.example.test
+        - "*.vendor.test"
+      ports: [80, 443]
+      noProxy:
+        - 127.0.0.1
+        - localhost

@@ -1,0 +1,33 @@
+apiVersion: debug.cfi.dev/v1alpha1
+kind: DebugProfile
+metadata:
+  name: env-and-init
+  namespace: default
+spec:
+  selector:
+    namespaceOptIn:
+      debug-operator.cfi.dev/enabled: "true"
+    podLabels:
+      app: target
+    imageGlobs:
+      - "ghcr.io/acme/*"
+  injection:
+    env:
+      - name: DEBUG_OPERATOR_ENABLED
+        value: "true"
+      - name: PYTHONBREAKPOINT
+        value: ipdb.set_trace
+    initContainers:
+      - name: debug-bootstrap
+        image: python:3.13-alpine
+        command: ["python", "-c"]
+        args: ["print('debug init container ran')"]
+    volumes:
+      - name: debug-config
+        configMap:
+          name: debug-bootstrap-output
+          optional: true
+    volumeMounts:
+      - name: debug-config
+        mountPath: /debug
+        readOnly: true

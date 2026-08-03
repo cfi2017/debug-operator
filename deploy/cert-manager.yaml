@@ -1,0 +1,20 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: debug-operator-selfsigned
+  namespace: debug-operator-system
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: debug-operator-serving-cert
+  namespace: debug-operator-system
+spec:
+  secretName: debug-operator-tls
+  dnsNames:
+    - debug-operator-webhook.debug-operator-system.svc
+    - debug-operator-webhook.debug-operator-system.svc.cluster.local
+  issuerRef:
+    name: debug-operator-selfsigned
