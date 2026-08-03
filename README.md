@@ -29,6 +29,17 @@ Build an image with:
 make docker-build IMAGE=example.com/debug-operator:dev
 ```
 
+## Releases
+
+Releases are automated from Conventional Commit messages on `main` using semantic-release. A release updates `Cargo.toml`, `Cargo.lock`, `charts/debug-operator/Chart.yaml`, and `CHANGELOG.md`, creates a GitHub Release/tag, then publishes the operator image to GHCR.
+
+Published image tags:
+
+- `ghcr.io/cfi2017/debug-operator:<version>`
+- `ghcr.io/cfi2017/debug-operator:<major>`
+- `ghcr.io/cfi2017/debug-operator:<major>.<minor>`
+- `ghcr.io/cfi2017/debug-operator:latest`
+
 ## Install sketch
 
 Generate and apply the CRD first:
