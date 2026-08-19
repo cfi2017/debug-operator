@@ -1,3 +1,9 @@
+## [1.0.2](https://github.com/cfi2017/debug-operator/compare/v1.0.1...v1.0.2) (2026-08-19)
+
+### Bug Fixes
+
+* **chart:** use appVersion ([1910ea2](https://github.com/cfi2017/debug-operator/commit/1910ea2aaa027fd1db648c46af27c1942e6b9bbe))
+
 ## [1.0.1](https://github.com/cfi2017/debug-operator/compare/v1.0.0...v1.0.1) (2026-08-19)
 
 ### Bug Fixes

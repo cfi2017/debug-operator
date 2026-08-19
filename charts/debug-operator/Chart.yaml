@@ -2,8 +2,8 @@ apiVersion: v2
 name: debug-operator
 description: Admission operator for injecting debugging profiles into Kubernetes workloads.
 type: application
-version: 1.0.1
-appVersion: "1.0.1"
+version: 1.0.2
+appVersion: "1.0.2"
 sources:
   - https://github.com/cfi2017/debug-operator
 maintainers:
