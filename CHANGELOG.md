@@ -1,3 +1,9 @@
+## [1.1.0](https://github.com/cfi2017/debug-operator/compare/v1.0.3...v1.1.0) (2026-08-19)
+
+### Features
+
+* bootstrap-improvements ([#1](https://github.com/cfi2017/debug-operator/issues/1)) ([fe5dea6](https://github.com/cfi2017/debug-operator/commit/fe5dea67da3e50af9146a49ba223162cd0012d43))
+
 ## [1.0.3](https://github.com/cfi2017/debug-operator/compare/v1.0.2...v1.0.3) (2026-08-19)
 
 ### Bug Fixes
