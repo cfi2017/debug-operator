@@ -98,7 +98,10 @@ bootstrap:
 ```
 
 `outputConfigMaps` acts as an allowlist when set. UTF-8 files become ConfigMap `data`;
-other files become `binaryData`. Bootstrap Jobs do not require ConfigMap RBAC.
+other files become `binaryData`. Bootstrap Jobs do not require ConfigMap RBAC. The
+operator publishes each output into the DebugProfile namespace and every namespace
+matching `selector.namespaceOptIn`, so cross-namespace target workloads receive the
+same ConfigMap content.
 
 ## Traffic interception
 

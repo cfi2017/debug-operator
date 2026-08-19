@@ -5,7 +5,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::{
     batch::v1::{Job, JobSpec},
-    core::v1::{ConfigMap, Container, EnvVar, Pod, PodSpec, PodTemplateSpec},
+    core::v1::{ConfigMap, Container, EnvVar, Namespace, Pod, PodSpec, PodTemplateSpec},
 };
 use kube::{
     Client, Resource, ResourceExt,
@@ -124,7 +124,10 @@ async fn reconcile_profile(client: Client, profile: DebugProfile) -> anyhow::Res
     let (ready, output_config_maps, last_error) = if succeeded {
         match publish_config_maps(&client, &profile, &job_name, bootstrap).await {
             Ok(names) => (true, names, None),
-            Err(err) => (false, Vec::new(), Some(err.to_string())),
+            Err(err) => {
+                warn!(profile = %name, job = %job_name, ?err, "failed to publish bootstrap outputs");
+                (false, Vec::new(), Some(err.to_string()))
+            }
         }
     } else if failed {
         (false, Vec::new(), Some("bootstrap job failed".to_string()))
@@ -269,28 +272,47 @@ async fn publish_config_maps(
         .namespace()
         .context("DebugProfile must be namespaced")?;
     let pods: Api<Pod> = Api::namespaced(client.clone(), &ns);
-    let pod = pods
+    let pod_list = pods
         .list(&ListParams::default().labels(&format!("job-name={job_name}")))
-        .await?
-        .items
-        .into_iter()
-        .next()
-        .context("bootstrap pod not found")?;
-    let logs = pods
-        .logs(
-            &pod.name_any(),
-            &LogParams {
-                container: Some("bootstrap".to_string()),
-                ..Default::default()
-            },
-        )
         .await?;
-    let payload = logs
-        .lines()
-        .rev()
-        .find_map(|line| line.strip_prefix(OUTPUT_MARKER))
-        .context("bootstrap output record not found in pod logs")?;
-    let files: BTreeMap<String, String> = serde_json::from_str(payload)?;
+    anyhow::ensure!(!pod_list.items.is_empty(), "bootstrap pod not found");
+    let mut payload = None;
+    let mut log_errors = Vec::new();
+    for pod in pod_list.items.iter().rev() {
+        match pods
+            .logs(
+                &pod.name_any(),
+                &LogParams {
+                    container: Some("bootstrap".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            Ok(logs) => {
+                if let Some(record) = logs
+                    .lines()
+                    .rev()
+                    .find_map(|line| line.strip_prefix(OUTPUT_MARKER))
+                {
+                    payload = Some(record.to_string());
+                    break;
+                }
+            }
+            Err(err) => log_errors.push(format!("{}: {err}", pod.name_any())),
+        }
+    }
+    let payload = payload.with_context(|| {
+        format!(
+            "bootstrap output record not found in pod logs{}",
+            if log_errors.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", log_errors.join(", "))
+            }
+        )
+    })?;
+    let files: BTreeMap<String, String> = serde_json::from_str(&payload)?;
     let mut maps: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut binary_maps: BTreeMap<String, BTreeMap<String, k8s_openapi::ByteString>> =
         BTreeMap::new();
@@ -330,34 +352,75 @@ async fn publish_config_maps(
         }
     }
 
-    let config_maps: Api<ConfigMap> = Api::namespaced(client.clone(), &ns);
     let names: std::collections::BTreeSet<_> =
         maps.keys().chain(binary_maps.keys()).cloned().collect();
-    for map_name in &names {
-        let config_map = ConfigMap {
-            metadata: kube::core::ObjectMeta {
-                name: Some(map_name.clone()),
-                namespace: Some(ns.clone()),
-                labels: Some(BTreeMap::from([(
-                    MANAGED_BY_LABEL.to_string(),
-                    OPERATOR_NAME.to_string(),
-                )])),
-                owner_references: profile.controller_owner_ref(&()).map(|owner| vec![owner]),
-                ..Default::default()
-            },
-            data: maps.remove(map_name),
-            binary_data: binary_maps.remove(map_name),
-            ..Default::default()
-        };
-        config_maps
-            .patch(
-                map_name,
-                &PatchParams::apply(OPERATOR_NAME).force(),
-                &Patch::Apply(&config_map),
+
+    let namespaces: Api<Namespace> = Api::all(client.clone());
+    let mut target_namespaces: std::collections::BTreeSet<String> = namespaces
+        .list(&ListParams::default())
+        .await?
+        .items
+        .into_iter()
+        .filter(|namespace| {
+            labels_match(
+                &profile.spec.selector.namespace_opt_in,
+                namespace.metadata.labels.as_ref(),
             )
-            .await?;
+        })
+        .filter_map(|namespace| namespace.metadata.name)
+        .collect();
+    target_namespaces.insert(ns.clone());
+
+    for target_ns in target_namespaces {
+        let config_maps: Api<ConfigMap> = Api::namespaced(client.clone(), &target_ns);
+        for map_name in &names {
+            let config_map = ConfigMap {
+                metadata: kube::core::ObjectMeta {
+                    name: Some(map_name.clone()),
+                    namespace: Some(target_ns.clone()),
+                    labels: Some(BTreeMap::from([(
+                        MANAGED_BY_LABEL.to_string(),
+                        OPERATOR_NAME.to_string(),
+                    )])),
+                    annotations: Some(BTreeMap::from([
+                        (
+                            "debug-operator.hadron.re/source-profile".to_string(),
+                            format!("{ns}/{}", profile.name_any()),
+                        ),
+                        (
+                            "debug-operator.hadron.re/source-profile-uid".to_string(),
+                            profile.metadata.uid.clone().unwrap_or_default(),
+                        ),
+                    ])),
+                    owner_references: (target_ns == ns)
+                        .then(|| profile.controller_owner_ref(&()))
+                        .flatten()
+                        .map(|owner| vec![owner]),
+                    ..Default::default()
+                },
+                data: maps.get(map_name).cloned(),
+                binary_data: binary_maps.get(map_name).cloned(),
+                ..Default::default()
+            };
+            config_maps
+                .patch(
+                    map_name,
+                    &PatchParams::apply(OPERATOR_NAME).force(),
+                    &Patch::Apply(&config_map),
+                )
+                .await?;
+        }
     }
     Ok(names.into_iter().collect())
+}
+
+fn labels_match(
+    required: &BTreeMap<String, String>,
+    actual: Option<&BTreeMap<String, String>>,
+) -> bool {
+    required
+        .iter()
+        .all(|(key, value)| actual.and_then(|labels| labels.get(key)) == Some(value))
 }
 
 async fn patch_status(
