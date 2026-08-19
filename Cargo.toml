@@ -4,6 +4,7 @@ version = "1.0.0"
 edition = "2024"
 
 [dependencies]
+rustls = { version = "0.23", features = ["ring"] }
 anyhow = "1.0"
 axum = "0.8"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
