@@ -11,8 +11,9 @@ The shareable unit is a namespaced `DebugProfile` CRD. Profiles select Pods by n
 - Skips the operator's own Pods and Pods already annotated as mutated.
 - Uses deterministic JSON patches and fails admission on name conflicts by default.
 - Runs optional Python bootstrap code as a per-profile, per-generation Kubernetes Job.
-- Skips non-optional bootstrap profiles until declared output ConfigMaps/Secrets exist.
-- Rechecks bootstrap outputs every 15 seconds.
+- Installs declared `pythonDependencies` before executing bootstrap code.
+- Publishes bootstrap files as operator-owned ConfigMaps after the Job succeeds, without granting the Job Kubernetes API permissions.
+- Skips non-optional bootstrap profiles until their bootstrap Job succeeds and its outputs are published.
 - Supports `spec.network.mode: explicitProxy` by injecting a mitmproxy sidecar, proxy env vars, optional rules ConfigMap, and optional CA Secret trust hints.
 - Declares `transparentProxy` and `dnsProxy` as CRD modes, but currently rejects them during admission until their privileged/DNS mutation logic is implemented.
 
@@ -73,7 +74,31 @@ kubectl label namespace default debug-operator.hadron.re/enabled=true
 kubectl apply -f samples/env-and-init-profile.yaml
 ```
 
-For the bootstrap-output sample, also apply `samples/bootstrap-rbac.yaml` so the bootstrap Job can write its ConfigMap.
+Bootstrap code writes ConfigMap entries below
+`$BOOTSTRAP_OUTPUT_DIRECTORY/configmaps/<config-map-name>/<key>`. The default output
+directory is `/debug-operator-output`. After the Job succeeds, the operator applies
+those files as ConfigMaps. For example:
+
+```yaml
+bootstrap:
+  image: python:3.13-alpine
+  pythonDependencies:
+    - requests==2.32.5
+  source: |
+    import os
+    path = os.path.join(
+        os.environ["BOOTSTRAP_OUTPUT_DIRECTORY"],
+        "configmaps", "my-settings"
+    )
+    os.makedirs(path, exist_ok=True)
+    with open(os.path.join(path, "settings.json"), "w") as output:
+        output.write('{"enabled":true}')
+  outputConfigMaps:
+    - my-settings
+```
+
+`outputConfigMaps` acts as an allowlist when set. UTF-8 files become ConfigMap `data`;
+other files become `binaryData`. Bootstrap Jobs do not require ConfigMap RBAC.
 
 ## Traffic interception
 
@@ -91,7 +116,7 @@ spec:
       caSecret: debug-mitm-ca
 ```
 
-This injects `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, optional `NO_PROXY`, CA trust env hints, a rules volume at `/debug-proxy/rules`, and a mitmproxy sidecar. The rules ConfigMap is expected to contain `addon.py`; bootstrap Jobs can generate that ConfigMap and the CA Secret.
+This injects `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, optional `NO_PROXY`, CA trust env hints, a rules volume at `/debug-proxy/rules`, and a mitmproxy sidecar. The rules ConfigMap is expected to contain `addon.py`; bootstrap Jobs can generate that ConfigMap.
 
 The intended implementation order remains:
 

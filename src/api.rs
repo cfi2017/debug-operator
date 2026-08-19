@@ -64,6 +64,10 @@ pub struct BootstrapSpec {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: Vec<EnvVar>,
+    #[serde(default)]
+    pub python_dependencies: Vec<String>,
+    #[serde(default = "default_bootstrap_output_directory")]
+    pub output_directory: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_account_name: Option<String>,
     #[serde(default)]
@@ -247,6 +251,10 @@ pub struct ProfileStore {
 
 fn default_namespace_opt_in() -> BTreeMap<String, String> {
     BTreeMap::from([(NS_OPT_IN_LABEL.to_string(), "true".to_string())])
+}
+
+fn default_bootstrap_output_directory() -> String {
+    "/debug-operator-output".to_string()
 }
 
 fn default_proxy_name() -> String {

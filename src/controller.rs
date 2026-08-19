@@ -1,14 +1,15 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::Context;
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::{
     batch::v1::{Job, JobSpec},
-    core::v1::{ConfigMap, Container, PodSpec, PodTemplateSpec, Secret},
+    core::v1::{ConfigMap, Container, EnvVar, Pod, PodSpec, PodTemplateSpec},
 };
 use kube::{
     Client, Resource, ResourceExt,
-    api::{Api, Patch, PatchParams, PostParams},
+    api::{Api, ListParams, LogParams, Patch, PatchParams, PostParams},
     runtime::watcher,
 };
 use tokio::sync::RwLock;
@@ -17,6 +18,8 @@ use tracing::{error, info, warn};
 use crate::api::{
     BootstrapSpec, DebugProfile, DebugProfileStatus, MANAGED_BY_LABEL, OPERATOR_NAME, ProfileStore,
 };
+
+const OUTPUT_MARKER: &str = "DEBUG_OPERATOR_OUTPUTS=";
 
 pub async fn run_profile_cache(client: Client, store: Arc<RwLock<ProfileStore>>) {
     let profiles: Api<DebugProfile> = Api::all(client);
@@ -96,13 +99,38 @@ async fn reconcile_profile(client: Client, profile: DebugProfile) -> anyhow::Res
 
     let jobs: Api<Job> = Api::namespaced(client.clone(), &ns);
     let job_name = bootstrap_job_name(&name, generation);
-    if jobs.get_opt(&job_name).await?.is_none() {
+    let job = if let Some(job) = jobs.get_opt(&job_name).await? {
+        job
+    } else {
         let job = build_bootstrap_job(&profile, bootstrap, &job_name)?;
-        jobs.create(&PostParams::default(), &job).await?;
+        let job = jobs.create(&PostParams::default(), &job).await?;
         info!(profile = %name, job = %job_name, "created bootstrap job");
-    }
+        job
+    };
 
-    let ready = outputs_exist(&client, &ns, bootstrap).await?;
+    let failed = job
+        .status
+        .as_ref()
+        .and_then(|status| status.failed)
+        .unwrap_or_default()
+        > 0;
+    let succeeded = job
+        .status
+        .as_ref()
+        .and_then(|status| status.succeeded)
+        .unwrap_or_default()
+        > 0;
+
+    let (ready, output_config_maps, last_error) = if succeeded {
+        match publish_config_maps(&client, &profile, &job_name, bootstrap).await {
+            Ok(names) => (true, names, None),
+            Err(err) => (false, Vec::new(), Some(err.to_string())),
+        }
+    } else if failed {
+        (false, Vec::new(), Some("bootstrap job failed".to_string()))
+    } else {
+        (false, Vec::new(), None)
+    };
     patch_status(
         &client,
         &ns,
@@ -111,9 +139,9 @@ async fn reconcile_profile(client: Client, profile: DebugProfile) -> anyhow::Res
             observed_generation: Some(generation),
             ready: ready || bootstrap.optional,
             bootstrap_job: Some(job_name),
-            output_config_maps: bootstrap.output_config_maps.clone(),
-            output_secrets: bootstrap.output_secrets.clone(),
-            last_error: None,
+            output_config_maps,
+            output_secrets: Vec::new(),
+            last_error,
         },
     )
     .await?;
@@ -142,12 +170,14 @@ fn build_bootstrap_job(
         });
     }
 
-    let mut command = bootstrap.command.clone();
-    let mut args = bootstrap.args.clone();
-    if let Some(source) = bootstrap.source.as_ref() {
-        command = vec!["python".to_string(), "-c".to_string()];
-        args = vec![source.clone()];
-    }
+    let wrapper = bootstrap_wrapper(bootstrap)?;
+    let mut env = bootstrap.env.clone();
+    env.retain(|variable| variable.name != "BOOTSTRAP_OUTPUT_DIRECTORY");
+    env.push(EnvVar {
+        name: "BOOTSTRAP_OUTPUT_DIRECTORY".to_string(),
+        value: Some(bootstrap.output_directory.clone()),
+        ..Default::default()
+    });
 
     Ok(Job {
         metadata: kube::core::ObjectMeta {
@@ -177,9 +207,9 @@ fn build_bootstrap_job(
                     containers: vec![Container {
                         name: "bootstrap".to_string(),
                         image: Some(bootstrap.image.clone()),
-                        command: (!command.is_empty()).then_some(command),
-                        args: (!args.is_empty()).then_some(args),
-                        env: (!bootstrap.env.is_empty()).then_some(bootstrap.env.clone()),
+                        command: Some(vec!["python".to_string(), "-c".to_string()]),
+                        args: Some(vec![wrapper]),
+                        env: Some(env),
                         ..Default::default()
                     }],
                     ..Default::default()
@@ -191,26 +221,143 @@ fn build_bootstrap_job(
     })
 }
 
-async fn outputs_exist(
+fn bootstrap_wrapper(bootstrap: &BootstrapSpec) -> anyhow::Result<String> {
+    let dependencies = serde_json::to_string(&bootstrap.python_dependencies)?;
+    let source = bootstrap
+        .source
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?
+        .unwrap_or_else(|| "None".to_string());
+    let command = serde_json::to_string(&bootstrap.command)?;
+    let args = serde_json::to_string(&bootstrap.args)?;
+    let output_directory = serde_json::to_string(&bootstrap.output_directory)?;
+
+    Ok(format!(
+        r#"import base64, json, os, pathlib, subprocess, sys
+dependencies = {dependencies}
+source = {source}
+command = {command}
+args = {args}
+output_directory = {output_directory}
+if dependencies:
+    subprocess.run([sys.executable, "-m", "pip", "install", *dependencies], check=True)
+if source is not None:
+    exec(compile(source, "<bootstrap>", "exec"), {{"__name__": "__main__"}})
+elif command:
+    subprocess.run([*command, *args], check=True)
+root = pathlib.Path(output_directory) / "configmaps"
+outputs = {{}}
+if root.exists():
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        relative = path.relative_to(root)
+        if len(relative.parts) != 2:
+            raise ValueError(f"output path must be configmaps/<name>/<key>: {{relative}}")
+        outputs[str(relative)] = base64.b64encode(path.read_bytes()).decode("ascii")
+print("{OUTPUT_MARKER}" + json.dumps(outputs, separators=(",", ":")))
+"#
+    ))
+}
+
+async fn publish_config_maps(
     client: &Client,
-    ns: &str,
+    profile: &DebugProfile,
+    job_name: &str,
     bootstrap: &BootstrapSpec,
-) -> anyhow::Result<bool> {
-    let config_maps: Api<ConfigMap> = Api::namespaced(client.clone(), ns);
-    for name in &bootstrap.output_config_maps {
-        if config_maps.get_opt(name).await?.is_none() {
-            return Ok(false);
+) -> anyhow::Result<Vec<String>> {
+    let ns = profile
+        .namespace()
+        .context("DebugProfile must be namespaced")?;
+    let pods: Api<Pod> = Api::namespaced(client.clone(), &ns);
+    let pod = pods
+        .list(&ListParams::default().labels(&format!("job-name={job_name}")))
+        .await?
+        .items
+        .into_iter()
+        .next()
+        .context("bootstrap pod not found")?;
+    let logs = pods
+        .logs(
+            &pod.name_any(),
+            &LogParams {
+                container: Some("bootstrap".to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let payload = logs
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix(OUTPUT_MARKER))
+        .context("bootstrap output record not found in pod logs")?;
+    let files: BTreeMap<String, String> = serde_json::from_str(payload)?;
+    let mut maps: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    let mut binary_maps: BTreeMap<String, BTreeMap<String, k8s_openapi::ByteString>> =
+        BTreeMap::new();
+    for (relative, encoded) in files {
+        let (map_name, key) = relative
+            .split_once('/')
+            .context("bootstrap output path must be <configmap>/<key>")?;
+        let value = BASE64.decode(encoded)?;
+        match String::from_utf8(value) {
+            Ok(value) => {
+                maps.entry(map_name.to_string())
+                    .or_default()
+                    .insert(key.to_string(), value);
+            }
+            Err(err) => {
+                binary_maps
+                    .entry(map_name.to_string())
+                    .or_default()
+                    .insert(key.to_string(), k8s_openapi::ByteString(err.into_bytes()));
+            }
         }
     }
 
-    let secrets: Api<Secret> = Api::namespaced(client.clone(), ns);
-    for name in &bootstrap.output_secrets {
-        if secrets.get_opt(name).await?.is_none() {
-            return Ok(false);
+    let declared = &bootstrap.output_config_maps;
+    if !declared.is_empty() {
+        for name in maps.keys().chain(binary_maps.keys()) {
+            anyhow::ensure!(
+                declared.contains(name),
+                "undeclared output ConfigMap {name}"
+            );
+        }
+        for name in declared {
+            anyhow::ensure!(
+                maps.contains_key(name) || binary_maps.contains_key(name),
+                "declared output ConfigMap {name} has no files"
+            );
         }
     }
 
-    Ok(true)
+    let config_maps: Api<ConfigMap> = Api::namespaced(client.clone(), &ns);
+    let names: std::collections::BTreeSet<_> =
+        maps.keys().chain(binary_maps.keys()).cloned().collect();
+    for map_name in &names {
+        let config_map = ConfigMap {
+            metadata: kube::core::ObjectMeta {
+                name: Some(map_name.clone()),
+                namespace: Some(ns.clone()),
+                labels: Some(BTreeMap::from([(
+                    MANAGED_BY_LABEL.to_string(),
+                    OPERATOR_NAME.to_string(),
+                )])),
+                owner_references: profile.controller_owner_ref(&()).map(|owner| vec![owner]),
+                ..Default::default()
+            },
+            data: maps.remove(map_name),
+            binary_data: binary_maps.remove(map_name),
+            ..Default::default()
+        };
+        config_maps
+            .patch(
+                map_name,
+                &PatchParams::apply(OPERATOR_NAME).force(),
+                &Patch::Apply(&config_map),
+            )
+            .await?;
+    }
+    Ok(names.into_iter().collect())
 }
 
 async fn patch_status(
