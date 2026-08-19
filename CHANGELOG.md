@@ -1,3 +1,9 @@
+## [1.0.1](https://github.com/cfi2017/debug-operator/compare/v1.0.0...v1.0.1) (2026-08-19)
+
+### Bug Fixes
+
+* **rustls:** use ring crypto ([ea79cc3](https://github.com/cfi2017/debug-operator/commit/ea79cc36d04016d858c5ff110ebce320589b3a5e))
+
 ## 1.0.0 (2026-08-03)
 
 ### Features

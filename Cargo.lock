@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "debug-operator"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -379,6 +379,7 @@ dependencies = [
  "jsonptr",
  "k8s-openapi",
  "kube",
+ "rustls",
  "schemars",
  "serde",
  "serde_json",
