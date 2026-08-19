@@ -1,3 +1,9 @@
+## [1.0.3](https://github.com/cfi2017/debug-operator/compare/v1.0.2...v1.0.3) (2026-08-19)
+
+### Bug Fixes
+
+* settle on ring for crypto impl ([b875fb1](https://github.com/cfi2017/debug-operator/commit/b875fb1b0c84baadbcff5382fba9d00fbb2223a4))
+
 ## [1.0.2](https://github.com/cfi2017/debug-operator/compare/v1.0.1...v1.0.2) (2026-08-19)
 
 ### Bug Fixes
