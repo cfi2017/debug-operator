@@ -14,6 +14,7 @@ use kube::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tracing::info;
 
 use crate::api::{
     BinaryPatchSpec, ConflictPolicy, DebugProfile, InjectionSpec, MANAGED_BY_LABEL,
@@ -247,6 +248,13 @@ fn add_binary_patches(
         bail!("all binary patches in a profile must use the same patcherImage");
     }
 
+    info!(
+        pod = %pod.name_any(),
+        patch_count = injection.binary_patches.len(),
+        image = %patcher_image,
+        "injecting binary patch init chain"
+    );
+
     let installer = Container {
         name: PATCH_INSTALLER.to_string(),
         image: Some(patcher_image),
@@ -290,6 +298,14 @@ fn add_binary_patches(
             .position(|container| container.name == patch.container)
             .with_context(|| format!("binary patch container '{}' not found", patch.container))?;
         let target = &spec.containers[target_index];
+        info!(
+            pod = %pod.name_any(),
+            container = %patch.container,
+            path = %patch.path,
+            expected_matches = patch.expected_matches,
+            replacement_source = if patch.replace_from.is_some() { "configMap" } else { "inline" },
+            "injecting binary patch"
+        );
         let output_name = format!("patch-{index}");
         let replacement = patch
             .replace_hex

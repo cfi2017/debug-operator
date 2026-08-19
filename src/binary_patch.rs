@@ -46,6 +46,11 @@ pub fn run_cli_if_requested() -> anyhow::Result<bool> {
 
 fn install_patcher(destination: &Path, writable_directories: &[String]) -> anyhow::Result<()> {
     let source = std::env::current_exe().context("locate patcher executable")?;
+    eprintln!(
+        "binary-patch: installing patcher from {} to {}",
+        source.display(),
+        destination.display()
+    );
     let parent = destination
         .parent()
         .context("patcher destination has no parent")?;
@@ -56,7 +61,9 @@ fn install_patcher(destination: &Path, writable_directories: &[String]) -> anyho
     for directory in writable_directories {
         fs::create_dir_all(directory)?;
         fs::set_permissions(directory, fs::Permissions::from_mode(0o777))?;
+        eprintln!("binary-patch: prepared writable directory {directory}");
     }
+    eprintln!("binary-patch: patcher installation complete");
     Ok(())
 }
 
@@ -69,6 +76,7 @@ pub fn patch_binary(
 ) -> anyhow::Result<()> {
     let find = decode_hex(find_hex).context("decode findHex")?;
     let replacement_hex = if let Some(path) = replace_hex.strip_prefix('@') {
+        eprintln!("binary-patch: reading replacement hex from {path}");
         fs::read_to_string(path).with_context(|| format!("read replacement hex from {path}"))?
     } else {
         replace_hex.to_string()
@@ -77,6 +85,14 @@ pub fn patch_binary(
     if find.is_empty() {
         bail!("findHex must not be empty");
     }
+
+    eprintln!(
+        "binary-patch: patching {} -> {} (find={} bytes, replacement={} bytes, expected_matches={expected_matches})",
+        source.display(),
+        output.display(),
+        find.len(),
+        replacement.len()
+    );
 
     let input = fs::read(source).with_context(|| format!("read {}", source.display()))?;
     let mut matches = Vec::new();
@@ -89,6 +105,11 @@ pub fn patch_binary(
             search_from += 1;
         }
     }
+    eprintln!(
+        "binary-patch: scanned {} bytes and found {} non-overlapping matches",
+        input.len(),
+        matches.len()
+    );
     if matches.len() != expected_matches {
         bail!(
             "expected {expected_matches} matches for findHex in {}, found {}",
@@ -113,6 +134,12 @@ pub fn patch_binary(
     fs::write(output, patched).with_context(|| format!("write {}", output.display()))?;
     let mode = fs::metadata(source)?.permissions().mode();
     fs::set_permissions(output, fs::Permissions::from_mode(mode))?;
+    eprintln!(
+        "binary-patch: wrote {} bytes to {} with mode {:04o}",
+        fs::metadata(output)?.len(),
+        output.display(),
+        mode & 0o7777
+    );
     Ok(())
 }
 
