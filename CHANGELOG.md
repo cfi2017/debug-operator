@@ -1,3 +1,9 @@
+## [1.2.1](https://github.com/cfi2017/debug-operator/compare/v1.2.0...v1.2.1) (2026-08-19)
+
+### Bug Fixes
+
+* add logging for binary patching ([3f52b28](https://github.com/cfi2017/debug-operator/commit/3f52b28b90baaa4be8ce517952144cf52708945b))
+
 ## [1.2.0](https://github.com/cfi2017/debug-operator/compare/v1.1.1...v1.2.0) (2026-08-19)
 
 ### Features
