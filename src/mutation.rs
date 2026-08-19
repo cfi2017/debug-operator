@@ -4,8 +4,8 @@ use anyhow::{Context, bail};
 use json_patch::{AddOperation, Patch, PatchOperation, ReplaceOperation};
 use jsonptr::PointerBuf;
 use k8s_openapi::api::core::v1::{
-    ConfigMapVolumeSource, Container, EnvVar, Namespace, Pod, SecretVolumeSource, Volume,
-    VolumeMount,
+    Capabilities, ConfigMapVolumeSource, Container, EmptyDirVolumeSource, EnvVar, KeyToPath,
+    Namespace, Pod, SecretVolumeSource, SecurityContext, Volume, VolumeMount,
 };
 use kube::{
     ResourceExt,
@@ -16,10 +16,14 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::api::{
-    ConflictPolicy, DebugProfile, InjectionSpec, MANAGED_BY_LABEL, MUTATED_BY_ANNOTATION,
-    MUTATION_HASH_ANNOTATION, NetworkMode, NetworkSpec, OPERATOR_NAME, PROFILE_ANNOTATION,
-    PROFILE_GENERATION_ANNOTATION, ProfileStore,
+    BinaryPatchSpec, ConflictPolicy, DebugProfile, InjectionSpec, MANAGED_BY_LABEL,
+    MUTATED_BY_ANNOTATION, MUTATION_HASH_ANNOTATION, NetworkMode, NetworkSpec, OPERATOR_NAME,
+    PROFILE_ANNOTATION, PROFILE_GENERATION_ANNOTATION, ProfileStore,
 };
+
+const PATCH_TOOLS_VOLUME: &str = "debug-operator-patch-tools";
+const PATCH_OUTPUT_VOLUME: &str = "debug-operator-patches";
+const PATCH_INSTALLER: &str = "debug-operator-patcher-install";
 
 pub async fn mutate_pod(
     req: &AdmissionRequest<Pod>,
@@ -130,8 +134,250 @@ pub fn build_patch(profile: &DebugProfile, pod: &Pod) -> anyhow::Result<Patch> {
     add_init_containers(&mut ops, pod, injection, &profile.spec.conflict_policy)?;
     add_volumes(&mut ops, pod, injection, &profile.spec.conflict_policy)?;
     add_volume_mounts(&mut ops, pod, injection, &profile.spec.conflict_policy)?;
+    add_binary_patches(&mut ops, pod, injection, &profile.spec.conflict_policy)?;
 
     Ok(Patch(ops))
+}
+
+fn add_binary_patches(
+    ops: &mut Vec<PatchOperation>,
+    pod: &Pod,
+    injection: &InjectionSpec,
+    policy: &ConflictPolicy,
+) -> anyhow::Result<()> {
+    if injection.binary_patches.is_empty() {
+        return Ok(());
+    }
+    let spec = pod.spec.as_ref().context("pod has no spec")?;
+    let mut destinations = BTreeSet::new();
+    for patch in &injection.binary_patches {
+        validate_binary_patch(patch)?;
+        if !destinations.insert((patch.container.as_str(), patch.path.as_str())) {
+            bail!(
+                "multiple binary patches target container '{}' path '{}'",
+                patch.container,
+                patch.path
+            );
+        }
+    }
+
+    for reserved in [PATCH_TOOLS_VOLUME, PATCH_OUTPUT_VOLUME] {
+        if injection
+            .volumes
+            .iter()
+            .any(|volume| volume.name == reserved)
+        {
+            bail!("volume name '{reserved}' is reserved for binary patches");
+        }
+    }
+    if injection
+        .volumes
+        .iter()
+        .any(|volume| volume.name.starts_with("debug-patch-input-"))
+    {
+        bail!("volume names beginning with 'debug-patch-input-' are reserved for binary patches");
+    }
+    if injection.init_containers.iter().any(|container| {
+        container.name == PATCH_INSTALLER || container.name.starts_with("debug-binary-patch-")
+    }) {
+        bail!("debug operator binary patch initContainer names are reserved");
+    }
+    for patch in &injection.binary_patches {
+        if injection
+            .volume_mounts
+            .iter()
+            .any(|mount| mount.mount_path == patch.path)
+        {
+            bail!(
+                "injection volumeMount already targets binary patch path '{}'",
+                patch.path
+            );
+        }
+    }
+
+    let mut volumes = vec![
+        Volume {
+            name: PATCH_TOOLS_VOLUME.to_string(),
+            empty_dir: Some(EmptyDirVolumeSource::default()),
+            ..Default::default()
+        },
+        Volume {
+            name: PATCH_OUTPUT_VOLUME.to_string(),
+            empty_dir: Some(EmptyDirVolumeSource::default()),
+            ..Default::default()
+        },
+    ];
+    for (index, patch) in injection.binary_patches.iter().enumerate() {
+        if let Some(source) = patch.replace_from.as_ref() {
+            volumes.push(Volume {
+                name: format!("debug-patch-input-{index}"),
+                config_map: Some(ConfigMapVolumeSource {
+                    name: source.config_map_key_ref.name.clone(),
+                    optional: source.config_map_key_ref.optional,
+                    items: Some(vec![KeyToPath {
+                        key: source.config_map_key_ref.key.clone(),
+                        path: "value".to_string(),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+    }
+    add_volumes_from_slice(ops, pod, &volumes, policy)?;
+
+    let patcher_image = injection
+        .binary_patches
+        .iter()
+        .find_map(|patch| patch.patcher_image.clone())
+        .or_else(|| std::env::var("DEBUG_OPERATOR_IMAGE").ok())
+        .unwrap_or_else(|| {
+            format!(
+                "ghcr.io/cfi2017/debug-operator:{}",
+                env!("CARGO_PKG_VERSION")
+            )
+        });
+    if injection.binary_patches.iter().any(|patch| {
+        patch
+            .patcher_image
+            .as_ref()
+            .is_some_and(|image| image != &patcher_image)
+    }) {
+        bail!("all binary patches in a profile must use the same patcherImage");
+    }
+
+    let installer = Container {
+        name: PATCH_INSTALLER.to_string(),
+        image: Some(patcher_image),
+        command: Some(vec!["/usr/local/bin/debug-operator".to_string()]),
+        args: Some(vec![
+            "install-patcher".to_string(),
+            "/debug-tools/debug-patcher".to_string(),
+            "/debug-patches".to_string(),
+        ]),
+        security_context: Some(SecurityContext {
+            allow_privilege_escalation: Some(false),
+            read_only_root_filesystem: Some(true),
+            run_as_non_root: Some(false),
+            run_as_user: Some(0),
+            capabilities: Some(Capabilities {
+                drop: Some(vec!["ALL".to_string()]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        volume_mounts: Some(vec![
+            VolumeMount {
+                name: PATCH_TOOLS_VOLUME.to_string(),
+                mount_path: "/debug-tools".to_string(),
+                ..Default::default()
+            },
+            VolumeMount {
+                name: PATCH_OUTPUT_VOLUME.to_string(),
+                mount_path: "/debug-patches".to_string(),
+                ..Default::default()
+            },
+        ]),
+        ..Default::default()
+    };
+    add_generated_init_container(ops, pod, &installer, policy)?;
+
+    for (index, patch) in injection.binary_patches.iter().enumerate() {
+        let target_index = spec
+            .containers
+            .iter()
+            .position(|container| container.name == patch.container)
+            .with_context(|| format!("binary patch container '{}' not found", patch.container))?;
+        let target = &spec.containers[target_index];
+        let output_name = format!("patch-{index}");
+        let replacement = patch
+            .replace_hex
+            .clone()
+            .unwrap_or_else(|| format!("@/debug-patch-inputs/{index}/value"));
+        let mut patcher_mounts = vec![
+            VolumeMount {
+                name: PATCH_TOOLS_VOLUME.to_string(),
+                mount_path: "/debug-tools".to_string(),
+                read_only: Some(true),
+                ..Default::default()
+            },
+            VolumeMount {
+                name: PATCH_OUTPUT_VOLUME.to_string(),
+                mount_path: "/debug-patches".to_string(),
+                ..Default::default()
+            },
+        ];
+        if patch.replace_from.is_some() {
+            patcher_mounts.push(VolumeMount {
+                name: format!("debug-patch-input-{index}"),
+                mount_path: format!("/debug-patch-inputs/{index}"),
+                read_only: Some(true),
+                ..Default::default()
+            });
+        }
+        let patcher = Container {
+            name: format!("debug-binary-patch-{index}"),
+            image: target.image.clone(),
+            image_pull_policy: target.image_pull_policy.clone(),
+            command: Some(vec!["/debug-tools/debug-patcher".to_string()]),
+            args: Some(vec![
+                "patch-binary".to_string(),
+                patch.path.clone(),
+                format!("/debug-patches/{output_name}"),
+                patch.find_hex.clone(),
+                replacement,
+                patch.expected_matches.to_string(),
+            ]),
+            security_context: target.security_context.clone(),
+            volume_mounts: Some(patcher_mounts),
+            ..Default::default()
+        };
+        add_generated_init_container(ops, pod, &patcher, policy)?;
+        add_binary_patch_mount(ops, pod, target_index, patch, &output_name)?;
+    }
+    Ok(())
+}
+
+fn validate_binary_patch(patch: &BinaryPatchSpec) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        patch.path.starts_with('/'),
+        "binary patch path must be absolute"
+    );
+    anyhow::ensure!(
+        patch.expected_matches > 0,
+        "expectedMatches must be greater than zero"
+    );
+    let find = hex::decode(
+        patch
+            .find_hex
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>(),
+    )
+    .context("binary patch findHex is invalid")?;
+    anyhow::ensure!(!find.is_empty(), "binary patch findHex must not be empty");
+    match (&patch.replace_hex, &patch.replace_from) {
+        (Some(replacement), None) => {
+            hex::decode(
+                replacement
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect::<String>(),
+            )
+            .context("binary patch replaceHex is invalid")?;
+        }
+        (None, Some(source)) => {
+            anyhow::ensure!(
+                !source.config_map_key_ref.name.is_empty()
+                    && !source.config_map_key_ref.key.is_empty(),
+                "binary patch replaceFrom ConfigMap name and key must not be empty"
+            );
+        }
+        (Some(_), Some(_)) => bail!("set only one of replaceHex or replaceFrom"),
+        (None, None) => bail!("one of replaceHex or replaceFrom is required"),
+    }
+    Ok(())
 }
 
 fn add_annotations(
@@ -499,6 +745,79 @@ fn add_init_containers(
     Ok(())
 }
 
+fn add_generated_init_container(
+    ops: &mut Vec<PatchOperation>,
+    pod: &Pod,
+    container: &Container,
+    policy: &ConflictPolicy,
+) -> anyhow::Result<()> {
+    let exists = pod
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.init_containers.as_ref())
+        .is_some_and(|containers| containers.iter().any(|item| item.name == container.name));
+    if exists {
+        return match policy {
+            ConflictPolicy::Fail => bail!("initContainer '{}' already exists", container.name),
+            ConflictPolicy::Override => Ok(()),
+        };
+    }
+    ensure_array(
+        ops,
+        pod.spec
+            .as_ref()
+            .and_then(|spec| spec.init_containers.as_ref())
+            .is_some(),
+        ["spec", "initContainers"],
+    );
+    push_add(
+        ops,
+        ["spec", "initContainers", "-"],
+        serde_json::to_value(container)?,
+    );
+    Ok(())
+}
+
+fn add_binary_patch_mount(
+    ops: &mut Vec<PatchOperation>,
+    pod: &Pod,
+    container_index: usize,
+    patch: &BinaryPatchSpec,
+    output_name: &str,
+) -> anyhow::Result<()> {
+    let container = &pod.spec.as_ref().context("pod has no spec")?.containers[container_index];
+    if container
+        .volume_mounts
+        .as_ref()
+        .is_some_and(|mounts| mounts.iter().any(|mount| mount.mount_path == patch.path))
+    {
+        bail!(
+            "container '{}' already has a volume mounted at binary patch path '{}'",
+            patch.container,
+            patch.path
+        );
+    }
+    let index = container_index.to_string();
+    ensure_array(
+        ops,
+        container.volume_mounts.is_some(),
+        ["spec", "containers", index.as_str(), "volumeMounts"],
+    );
+    let mount = VolumeMount {
+        name: PATCH_OUTPUT_VOLUME.to_string(),
+        mount_path: patch.path.clone(),
+        read_only: Some(true),
+        sub_path: Some(output_name.to_string()),
+        ..Default::default()
+    };
+    push_add(
+        ops,
+        ["spec", "containers", index.as_str(), "volumeMounts", "-"],
+        serde_json::to_value(mount)?,
+    );
+    Ok(())
+}
+
 fn add_volumes(
     ops: &mut Vec<PatchOperation>,
     pod: &Pod,
@@ -529,7 +848,7 @@ fn add_volumes(
         .and_then(|spec| spec.volumes.as_ref())
         .is_none()
     {
-        push_add(ops, ["spec", "volumes"], json!([]));
+        ensure_array(ops, false, ["spec", "volumes"]);
     }
     for volume in additions {
         push_add(ops, ["spec", "volumes", "-"], serde_json::to_value(volume)?);
@@ -567,7 +886,7 @@ fn add_volumes_from_slice(
         .and_then(|spec| spec.volumes.as_ref())
         .is_none()
     {
-        push_add(ops, ["spec", "volumes"], json!([]));
+        ensure_array(ops, false, ["spec", "volumes"]);
     }
     for volume in additions {
         push_add(ops, ["spec", "volumes", "-"], serde_json::to_value(volume)?);
@@ -775,6 +1094,26 @@ fn push_add<const N: usize>(ops: &mut Vec<PatchOperation>, tokens: [&str; N], va
     }));
 }
 
+fn ensure_array<const N: usize>(
+    ops: &mut Vec<PatchOperation>,
+    exists_in_pod: bool,
+    tokens: [&str; N],
+) {
+    if exists_in_pod {
+        return;
+    }
+    let path = PointerBuf::from_tokens(tokens);
+    let already_added = ops
+        .iter()
+        .any(|operation| matches!(operation, PatchOperation::Add(add) if add.path == path));
+    if !already_added {
+        ops.push(PatchOperation::Add(AddOperation {
+            path,
+            value: json!([]),
+        }));
+    }
+}
+
 fn mutation_hash(profile: &DebugProfile) -> anyhow::Result<String> {
     let bytes = serde_json::to_vec(&serde_json::json!({
         "injection": profile.spec.injection,
@@ -810,7 +1149,11 @@ fn is_operator_pod(pod: &Pod) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{DebugProfileSpec, NetworkSpec, ProfileSelector, ProxySpec, TlsMitmSpec};
+    use crate::api::{
+        BinaryPatchReplaceSource, BinaryPatchSpec, DebugProfileSpec, NetworkSpec, ProfileSelector,
+        ProxySpec, TlsMitmSpec,
+    };
+    use k8s_openapi::api::core::v1::ConfigMapKeySelector;
     use k8s_openapi::api::core::v1::{Container, EnvVar, PodSpec};
     use kube::core::ObjectMeta;
 
@@ -939,5 +1282,87 @@ mod tests {
         assert!(rendered.contains("debug-mitm-proxy"));
         assert!(rendered.contains("debug-mitm-ca"));
         assert!(rendered.contains("debug-proxy-rules"));
+    }
+
+    #[test]
+    fn binary_patch_injects_patcher_chain_and_subpath_mount() {
+        let mut profile = profile();
+        profile.spec.injection.binary_patches = vec![BinaryPatchSpec {
+            container: "app".to_string(),
+            path: "/usr/local/bin/service".to_string(),
+            find_hex: "48 89 e5".to_string(),
+            replace_hex: Some("90 90 90".to_string()),
+            replace_from: None,
+            expected_matches: 1,
+            patcher_image: Some("example.test/debug-operator:1.0".to_string()),
+        }];
+
+        let patch = build_patch(&profile, &pod()).unwrap();
+        let mut rendered_pod = serde_json::to_value(pod()).unwrap();
+        json_patch::patch(&mut rendered_pod, &patch).unwrap();
+
+        let init_containers = rendered_pod["spec"]["initContainers"].as_array().unwrap();
+        assert!(init_containers.iter().any(|container| {
+            container["name"] == PATCH_INSTALLER
+                && container["image"] == "example.test/debug-operator:1.0"
+        }));
+        assert!(
+            init_containers
+                .iter()
+                .any(|container| container["name"] == "debug-binary-patch-0")
+        );
+        let mounts = rendered_pod["spec"]["containers"][0]["volumeMounts"]
+            .as_array()
+            .unwrap();
+        assert!(mounts.iter().any(|mount| {
+            mount["mountPath"] == "/usr/local/bin/service" && mount["subPath"] == "patch-0"
+        }));
+    }
+
+    #[test]
+    fn binary_patch_rejects_invalid_hex_during_admission() {
+        let mut profile = profile();
+        profile.spec.injection.binary_patches = vec![BinaryPatchSpec {
+            container: "app".to_string(),
+            path: "/some/path".to_string(),
+            find_hex: "not hex".to_string(),
+            replace_hex: Some("00".to_string()),
+            replace_from: None,
+            expected_matches: 1,
+            patcher_image: None,
+        }];
+
+        assert!(
+            build_patch(&profile, &pod())
+                .unwrap_err()
+                .to_string()
+                .contains("findHex")
+        );
+    }
+
+    #[test]
+    fn binary_patch_mounts_replacement_from_config_map() {
+        let mut profile = profile();
+        profile.spec.injection.binary_patches = vec![BinaryPatchSpec {
+            container: "app".to_string(),
+            path: "/some/path".to_string(),
+            find_hex: "aabb".to_string(),
+            replace_hex: None,
+            replace_from: Some(BinaryPatchReplaceSource {
+                config_map_key_ref: ConfigMapKeySelector {
+                    name: "bootstrap-patch".to_string(),
+                    key: "replacement.hex".to_string(),
+                    ..Default::default()
+                },
+            }),
+            expected_matches: 1,
+            patcher_image: None,
+        }];
+
+        let patch = build_patch(&profile, &pod()).unwrap();
+        let rendered = serde_json::to_string(&patch).unwrap();
+        assert!(rendered.contains("bootstrap-patch"));
+        assert!(rendered.contains("replacement.hex"));
+        assert!(rendered.contains("@/debug-patch-inputs/0/value"));
     }
 }

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::api::{
     batch::v1::JobSpec,
-    core::v1::{Container, EnvVar, Volume, VolumeMount},
+    core::v1::{ConfigMapKeySelector, Container, EnvVar, Volume, VolumeMount},
 };
 use kube::CustomResource;
 use schemars::JsonSchema;
@@ -95,6 +95,30 @@ pub struct InjectionSpec {
     pub volumes: Vec<Volume>,
     #[serde(default)]
     pub volume_mounts: Vec<VolumeMount>,
+    #[serde(default)]
+    pub binary_patches: Vec<BinaryPatchSpec>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryPatchSpec {
+    pub container: String,
+    pub path: String,
+    pub find_hex: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace_hex: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace_from: Option<BinaryPatchReplaceSource>,
+    #[serde(default = "default_expected_matches")]
+    pub expected_matches: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patcher_image: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryPatchReplaceSource {
+    pub config_map_key_ref: ConfigMapKeySelector,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
@@ -255,6 +279,10 @@ fn default_namespace_opt_in() -> BTreeMap<String, String> {
 
 fn default_bootstrap_output_directory() -> String {
     "/debug-operator-output".to_string()
+}
+
+fn default_expected_matches() -> u32 {
+    1
 }
 
 fn default_proxy_name() -> String {

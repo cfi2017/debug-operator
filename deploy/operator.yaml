@@ -23,6 +23,8 @@ spec:
           image: ghcr.io/cfi2017/debug-operator:latest
           imagePullPolicy: IfNotPresent
           env:
+            - name: DEBUG_OPERATOR_IMAGE
+              value: ghcr.io/cfi2017/debug-operator:latest
             - name: RUST_LOG
               value: info,debug_operator=debug
             - name: LISTEN_ADDR

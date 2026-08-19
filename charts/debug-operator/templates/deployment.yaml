@@ -41,6 +41,8 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           env:
+            - name: DEBUG_OPERATOR_IMAGE
+              value: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
             - name: RUST_LOG
               value: {{ .Values.logLevel | quote }}
             - name: LISTEN_ADDR

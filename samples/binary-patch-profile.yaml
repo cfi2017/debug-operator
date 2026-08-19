@@ -1,0 +1,18 @@
+apiVersion: debug.hadron.re/v1alpha1
+kind: DebugProfile
+metadata:
+  name: binary-patch
+  namespace: default
+spec:
+  selector:
+    namespaceOptIn:
+      debug-operator.hadron.re/enabled: "true"
+    podLabels:
+      app: target
+  injection:
+    binaryPatches:
+      - container: app
+        path: /some/path
+        findHex: "48 89 e5 48 83 ec 20"
+        replaceHex: "90 90 90 90 90 90 90"
+        expectedMatches: 1

@@ -30,6 +30,10 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if debug_operator::binary_patch::run_cli_if_requested()? {
+        return Ok(());
+    }
+
     rustls::crypto::ring::default_provider()
         .install_default()
         .map_err(|_| anyhow::anyhow!("install ring as the rustls crypto provider"))?;

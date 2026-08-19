@@ -6993,6 +6993,7 @@
                   "injection": {
                     "default": {
                       "annotations": {},
+                      "binaryPatches": [],
                       "env": [],
                       "initContainers": [],
                       "volumeMounts": [],
@@ -7005,6 +7006,74 @@
                         },
                         "default": {},
                         "type": "object"
+                      },
+                      "binaryPatches": {
+                        "default": [],
+                        "items": {
+                          "properties": {
+                            "container": {
+                              "type": "string"
+                            },
+                            "expectedMatches": {
+                              "default": 1,
+                              "format": "uint32",
+                              "minimum": 0.0,
+                              "type": "integer"
+                            },
+                            "findHex": {
+                              "type": "string"
+                            },
+                            "patcherImage": {
+                              "nullable": true,
+                              "type": "string"
+                            },
+                            "path": {
+                              "type": "string"
+                            },
+                            "replaceFrom": {
+                              "nullable": true,
+                              "properties": {
+                                "configMapKeyRef": {
+                                  "description": "Selects a key from a ConfigMap.",
+                                  "properties": {
+                                    "key": {
+                                      "description": "The key to select.",
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "description": "Name of the referent. This field is effectively required, but due to backwards compatibility is allowed to be empty. Instances of this type with an empty value here are almost certainly wrong. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
+                                      "type": "string"
+                                    },
+                                    "optional": {
+                                      "description": "Specify whether the ConfigMap or its key must be defined",
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "key",
+                                    "name"
+                                  ],
+                                  "type": "object"
+                                }
+                              },
+                              "required": [
+                                "configMapKeyRef"
+                              ],
+                              "type": "object"
+                            },
+                            "replaceHex": {
+                              "nullable": true,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "container",
+                            "findHex",
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "env": {
                         "default": [],

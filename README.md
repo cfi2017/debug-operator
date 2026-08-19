@@ -103,6 +103,53 @@ operator publishes each output into the DebugProfile namespace and every namespa
 matching `selector.namespaceOptIn`, so cross-namespace target workloads receive the
 same ConfigMap content.
 
+## Binary patching
+
+`injection.binaryPatches` replaces byte sequences in files from selected application
+images before their containers start:
+
+```yaml
+injection:
+  binaryPatches:
+    - container: app
+      path: /some/path
+      findHex: "48 89 e5 48 83 ec 20"
+      replaceHex: "90 90 90 90 90 90 90"
+      expectedMatches: 1
+```
+
+The operator injects a patcher installer, an init container using the target
+container's image, and an `emptyDir` file mounted over the original path. Hex strings
+may contain whitespace, replacements may have a different length, and the original
+file mode is preserved. Pod admission rejects invalid hex, missing containers,
+duplicate destination paths, and existing mounts at the destination. The patch init
+container fails unless the actual match count equals `expectedMatches`.
+
+The replacement can also come from a bootstrap-generated ConfigMap:
+
+```yaml
+binaryPatches:
+  - container: app
+    path: /some/path
+    findHex: "48 89 e5"
+    replaceFrom:
+      configMapKeyRef:
+        name: generated-patch
+        key: replacement.hex
+    expectedMatches: 1
+```
+
+The referenced value is interpreted as hex and may contain whitespace. Only one of
+`replaceHex` and `replaceFrom` may be set. A non-optional bootstrap profile ensures
+the ConfigMap has been published into the target namespace before matching Pods are
+mutated.
+
+By default the installer uses the running operator image supplied through
+`DEBUG_OPERATOR_IMAGE`. `patcherImage` can override it for profiles that need a
+different registry. The installer currently runs as UID 0 so it can
+prepare writable shared volumes; clusters enforcing the Restricted Pod Security
+Standard must explicitly permit that init container.
+
 ## Traffic interception
 
 The first implemented network mode is explicit proxy interception:
