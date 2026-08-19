@@ -1,3 +1,9 @@
+## [1.1.1](https://github.com/cfi2017/debug-operator/compare/v1.1.0...v1.1.1) (2026-08-19)
+
+### Bug Fixes
+
+* resilience for outputs and namespace syncing ([576ef23](https://github.com/cfi2017/debug-operator/commit/576ef236106b4561a769df0adf597f6a6b619d5f))
+
 ## [1.1.0](https://github.com/cfi2017/debug-operator/compare/v1.0.3...v1.1.0) (2026-08-19)
 
 ### Features
