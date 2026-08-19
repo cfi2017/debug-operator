@@ -6945,7 +6945,18 @@
                         },
                         "type": "array"
                       },
+                      "outputDirectory": {
+                        "default": "/debug-operator-output",
+                        "type": "string"
+                      },
                       "outputSecrets": {
+                        "default": [],
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "pythonDependencies": {
                         "default": [],
                         "items": {
                           "type": "string"

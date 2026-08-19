@@ -11,33 +11,17 @@ spec:
       app: target
   bootstrap:
     image: python:3.13-alpine
-    serviceAccountName: debug-bootstrap-writer
+    pythonDependencies:
+      - requests==2.32.5
     source: |
-      import json
       import os
-      import ssl
-      import urllib.request
+      import requests
 
-      ns = open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read().strip()
-      token = open("/var/run/secrets/kubernetes.io/serviceaccount/token").read().strip()
-      ca = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-      body = json.dumps({
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": {"name": "debug-bootstrap-output", "namespace": ns},
-        "data": {"message": "hello-from-bootstrap"}
-      }).encode()
-      req = urllib.request.Request(
-        f"https://kubernetes.default.svc/api/v1/namespaces/{ns}/configmaps",
-        data=body,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        method="POST",
-      )
-      try:
-        urllib.request.urlopen(req, context=ssl.create_default_context(cafile=ca)).read()
-      except urllib.error.HTTPError as e:
-        if e.code != 409:
-          raise
+      output = os.environ["BOOTSTRAP_OUTPUT_DIRECTORY"]
+      path = os.path.join(output, "configmaps", "debug-bootstrap-output")
+      os.makedirs(path, exist_ok=True)
+      with open(os.path.join(path, "message"), "w") as file:
+          file.write("hello-from-bootstrap")
     outputConfigMaps:
       - debug-bootstrap-output
     optional: true
